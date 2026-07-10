@@ -1,14 +1,13 @@
 {
   lib,
-  pkgs,
-  stdenv,
-  nodePackages,
+  buildNpmPackage,
+  fetchFromGitHub,
   python3,
   udev,
   makeWrapper,
-  nodejs,
-  electron,
-  fetchFromGitHub,
+  nodejs_24,
+  electron_41,
+  node-gyp,
   gnugrep,
   gawk,
   xorg,
@@ -16,74 +15,30 @@
   which,
 }:
 
-let
-  version = "2.1.23";
-  inherit nodejs;
+buildNpmPackage rec {
+  pname = "tuxedo-control-center";
+  version = "3.0.6";
 
-  baseNodePackages = (
-    import ./node-composition.nix {
-      inherit pkgs nodejs;
-      inherit (stdenv.hostPlatform) system;
-    }
-  );
+  nodejs = nodejs_24;
 
-  nodePackages' = baseNodePackages.package.override {
-    src = fetchFromGitHub {
-      owner = "tuxedocomputers";
-      repo = "tuxedo-control-center";
-      rev = "v${version}";
-      hash = "sha256-sZkKC0w1H+wh9FIkHdV/VU1yYzPZAENK7NuMm0bAnGU=";
-    };
-
-    preRebuild = ''
-      # the shebang of this file does not work as is in nix;
-      # usually this is taken care of with patch-shebangs.sh,
-      # but that only handles files marked as executable.
-      # thus mark the file as executable before the hook runs.
-      chmod +x ./node_modules/electron-builder/out/cli/cli.js
-      # and since this runs *after* patch-shebangs ran,
-      # manually execute patch-shebangs for this specific file.
-      patchShebangs ./node_modules/electron-builder/out/cli/cli.js
-    '';
-
-    buildInputs = [
-      udev
-    ];
-
-    # Electron tries to download itself if this isn't set. We don't
-    # like that in nix so let's prevent it.
-    #
-    # This means we have to provide our own electron binaries when
-    # wrapping this program.
-    ELECTRON_SKIP_BINARY_DOWNLOAD = 1;
-
-    # Angular prompts for analytics, which in turn fails the build.
-    #
-    # We can disable analytics using false or empty string
-    # (See https://github.com/angular/angular-cli/blob/1a39c5202a6fe159f8d7db85a1c186176240e437/packages/angular/cli/models/analytics.ts#L506)
-    NG_CLI_ANALYTICS = "false";
+  src = fetchFromGitHub {
+    owner = "tuxedocomputers";
+    repo = "tuxedo-control-center";
+    rev = "v${version}";
+    hash = "sha256-wb4dj0YjfO9h+1H91dwZL8XSt3oaMe+wmoka4kyMZg8=";
   };
 
-in
+  npmDepsHash = "sha256-QhyU983cEmtv1yXnFf5tJqx40lZp67nuwgfdc2m5kFY=";
 
-stdenv.mkDerivation {
-  pname = "tuxedo-control-center";
-  inherit version;
+  nativeBuildInputs = [ makeWrapper python3 ];
 
-  src = "${nodePackages'}/lib/node_modules/tuxedo-control-center/";
+  buildInputs = [ udev ];
 
-  nativeBuildInputs = [
-    makeWrapper
-  ];
+  # Electron tries to download itself if this isn't set.
+  ELECTRON_SKIP_BINARY_DOWNLOAD = 1;
 
-  buildInputs = [
-    nodejs
-    udev
-
-    # For node-gyp
-    python3
-    nodePackages.node-gyp
-  ];
+  # Angular prompts for analytics, which fails the build.
+  NG_CLI_ANALYTICS = "false";
 
   postPatch = ''
     substituteInPlace src/common/classes/TccPaths.ts \
@@ -94,10 +49,6 @@ stdenv.mkDerivation {
       --replace "/opt/tuxedo-control-center/resources/dist/tuxedo-control-center/data/camera/v4l2_kernel_names.json" \
         "$out/share/tcc/v4l2_kernel_names.json"
 
-    substituteInPlace src/e-app/main.ts \
-      --replace "../../data/dist-data/tuxedo-control-center_256.png" "../../share/icons/hicolor/scalable/apps/tuxedo-control-center_256.png" \
-      --replace "appPath, '../../data/dist-data'" "'$out/share/tcc'"
-
     substituteInPlace src/dist-data/tccd-sleep.service \
       --replace "/bin/bash -c " ""
 
@@ -105,8 +56,7 @@ stdenv.mkDerivation {
       --replace "/opt/tuxedo-control-center/resources/dist/tuxedo-control-center/data/service/tccd" "$out/bin/tccd"
 
     substituteInPlace src/dist-data/tuxedo-control-center-tray.desktop \
-      --replace "/opt/tuxedo-control-center/tuxedo-control-center" "tuxedo-control-center" \
-      --replace "Icon=tuxedo-control-center" "Icon=tuxedo-control-center_256"
+      --replace "/opt/tuxedo-control-center/tuxedo-control-center" "tuxedo-control-center"
 
     substituteInPlace src/dist-data/tuxedo-control-center.desktop \
       --replace "/opt/tuxedo-control-center/tuxedo-control-center" "$out/bin/tuxedo-control-center" \
@@ -123,31 +73,50 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    # We already have `node_modules` in the current directory but we
-    # need it's binaries on `PATH` so we can use them!
+    # Apply patch-package patches manually since --ignore-scripts skips postinstall.
+    patch -p1 -d node_modules/@electron/rebuild < patches/@electron+rebuild+4.0.3.patch
+
     export PATH="./node_modules/.bin:$PATH"
-    # Prevent npm from checking for updates
     export NO_UPDATE_NOTIFIER=true
 
-    # The order of `npm` commands matches what `npm run build-prod` does but we split
-    # it out so we can customise the native builds in `npm run build-service`.
-    npm run clean
+    # Build the electron app TypeScript
     npm run build-electron
 
-    # We don't use `npm run build-service` here because it uses `pkg` which packages
-    # node binaries in a way unsuitable for nix. Instead we're doing it ourself.
+    # Build native module.
+    # We don't use npm run build-native-prod because it invokes node-gyp from
+    # node_modules which tries to fetch the Node.js headers. We use the nixpkgs
+    # node-gyp instead and point it to our nodejs headers.
+    export npm_config_nodedir=${nodejs_24}
+    ${node-gyp}/bin/node-gyp configure --release
+    ${node-gyp}/bin/node-gyp rebuild --release
+
+    # Build service app TypeScript and bundle with esbuild.
+    # We don't use npm run build-service-prod because it calls `pkg` which packages
+    # node binaries in a way unsuitable for nix. We run the steps manually and
+    # wrap with node in postFixup instead.
     tsc -p ./src/service-app
     cp ./src/package.json ./dist/tuxedo-control-center/service-app/package.json
+    mkdir -p ./dist/tuxedo-control-center/service-app/native-lib
+    cp ./build/Release/TuxedoIOAPI.node ./dist/tuxedo-control-center/service-app/native-lib/
+    esbuild ./dist/tuxedo-control-center/service-app/service-app/main.js \
+      --tree-shaking=true \
+      --bundle \
+      --minify \
+      --drop:debugger \
+      --define:DEBUG=false \
+      --platform=node \
+      --loader:.node=copy \
+      --asset-names=[name] \
+      --outfile=./dist/tuxedo-control-center/service-app/service-app/esbuild.js
 
-    # We need to tell npm where to find node or `node-gyp` will try to download it.
-    # This also _needs_ to be lowercase or `npm` won't detect it
-    export npm_config_nodedir=${nodejs}
-    ${nodePackages.node-gyp}/bin/node-gyp configure && ${nodePackages.node-gyp}/bin/node-gyp rebuild # Builds to ./build/Release/TuxedoIOAPI.node
-
-    npm run build-ng-prod
+    # Build Angular frontend
+    cp CHANGELOG.md ./src/ng-app/assets/
+    ng build --configuration production --aot true --optimization true
 
     runHook postBuild
   '';
+
+  dontNpmInstall = true;
 
   installPhase = ''
     runHook preInstall
@@ -155,10 +124,7 @@ stdenv.mkDerivation {
     mkdir -p $out
     cp -R ./dist/tuxedo-control-center/* $out
 
-    ln -s $src/node_modules $out/node_modules
-
-    mkdir -p $out/service-app/native-lib
-    cp ./build/Release/TuxedoIOAPI.node $out/service-app/native-lib/TuxedoIOAPI.node
+    cp -r ./node_modules $out/node_modules
 
     mkdir -p $out/share/applications \
       $out/libexec \
@@ -188,8 +154,8 @@ stdenv.mkDerivation {
   '';
 
   postFixup = ''
-    makeWrapper ${nodejs}/bin/node $out/bin/tccd \
-      --add-flags "$out/service-app/service-app/main.js" \
+    makeWrapper ${nodejs_24}/bin/node $out/bin/tccd \
+      --add-flags "$out/service-app/service-app/esbuild.js" \
       --prefix PATH : "${
         lib.makeBinPath [
           gnugrep
@@ -201,7 +167,7 @@ stdenv.mkDerivation {
       }" \
       --prefix NODE_PATH : "$out/node_modules"
 
-    makeWrapper ${electron}/bin/electron $out/bin/tuxedo-control-center \
+    makeWrapper ${electron_41}/bin/electron $out/bin/tuxedo-control-center \
       --add-flags "$out/e-app/e-app/main.js" \
       --add-flags "--no-tccd-version-check" \
       --prefix PATH : "${lib.makeBinPath [ python3 ]}" \
