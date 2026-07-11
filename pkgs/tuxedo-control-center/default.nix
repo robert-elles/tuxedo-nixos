@@ -2,6 +2,7 @@
   lib,
   buildNpmPackage,
   fetchFromGitHub,
+  git,
   python3,
   udev,
   makeWrapper,
@@ -28,9 +29,12 @@ buildNpmPackage rec {
     hash = "sha256-wb4dj0YjfO9h+1H91dwZL8XSt3oaMe+wmoka4kyMZg8=";
   };
 
-  npmDepsHash = "sha256-QhyU983cEmtv1yXnFf5tJqx40lZp67nuwgfdc2m5kFY=";
+  npmDepsHash = "sha256-O9lo1hrqktM8EXUEE6TYFC7AEI3140+CeqUmpwG8Kw4=";
 
-  nativeBuildInputs = [ makeWrapper python3 ];
+  npmDepsFetcherVersion = 2;
+  forceGitDeps = true;
+
+  nativeBuildInputs = [ makeWrapper python3 git ];
 
   buildInputs = [ udev ];
 
@@ -72,9 +76,6 @@ buildNpmPackage rec {
 
   buildPhase = ''
     runHook preBuild
-
-    # Apply patch-package patches manually since --ignore-scripts skips postinstall.
-    patch -p1 -d node_modules/@electron/rebuild < patches/@electron+rebuild+4.0.3.patch
 
     export PATH="./node_modules/.bin:$PATH"
     export NO_UPDATE_NOTIFIER=true
