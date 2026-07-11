@@ -151,6 +151,13 @@ buildNpmPackage rec {
     cp src/dist-data/tuxedo-control-center_256.svg $out/share/icons/hicolor/scalable/apps/
     cp src/dist-data/tuxedo-control-center_256.png $out/share/icons/hicolor/scalable/apps/
 
+    # The electron app resolves these at runtime relative to its own
+    # __dirname (three levels up from e-app/e-app), so they need to exist
+    # under $out/data/dist-data instead of just the icon theme directory.
+    mkdir -p $out/data/dist-data
+    cp src/dist-data/tuxedo-control-center_256.png $out/data/dist-data/
+    cp src/dist-data/tuxedo-control-center-tray.desktop $out/data/dist-data/
+
     runHook postInstall
   '';
 
@@ -168,8 +175,20 @@ buildNpmPackage rec {
       }" \
       --prefix NODE_PATH : "$out/node_modules"
 
+    # Electron only picks up the app's name (and thus its userData/SingletonLock
+    # path under ~/.config) from a package.json next to main.js. Without it the
+    # app defaults to the name "Electron", which mismatches the "tuxedo-control-center"
+    # path the app itself hardcodes for its singleton-instance check, causing it
+    # to always think another instance is running and exit immediately.
+    cat > $out/e-app/e-app/package.json <<EOF
+    {
+      "name": "tuxedo-control-center",
+      "main": "main.js"
+    }
+    EOF
+
     makeWrapper ${electron_41}/bin/electron $out/bin/tuxedo-control-center \
-      --add-flags "$out/e-app/e-app/main.js" \
+      --add-flags "$out/e-app/e-app" \
       --add-flags "--no-tccd-version-check" \
       --prefix PATH : "${lib.makeBinPath [ python3 ]}" \
       --prefix NODE_PATH : "$out/node_modules"
