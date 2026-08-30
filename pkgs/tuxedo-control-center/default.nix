@@ -11,7 +11,7 @@
   node-gyp,
   gnugrep,
   gawk,
-  xorg,
+  xrandr,
   procps,
   which,
 }:
@@ -168,7 +168,7 @@ buildNpmPackage rec {
         lib.makeBinPath [
           gnugrep
           gawk
-          xorg.xrandr
+          xrandr
           procps
           which
         ]
