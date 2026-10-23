@@ -9,7 +9,7 @@ with lib;
 
 let
   cfg = config.hardware.tuxedo-control-center;
-  tuxedo-drivers = config.boot.kernelPackages.tuxedo-keyboard;
+  tuxedo-drivers = cfg.driversPackage;
 in
 {
   options.hardware.tuxedo-control-center = {
@@ -30,14 +30,30 @@ in
         Which package to use for tuxedo-control-center.
       '';
     };
+
+    driversPackage = mkOption {
+      type = types.package;
+      # bash ends up in the udev rules (host side); take it from the native
+      # package set so clang-built kernels (pkgsLLVM) don't rebuild it.
+      default = config.boot.kernelPackages.callPackage ../pkgs/tuxedo-drivers {
+        inherit (pkgs) bash;
+      };
+      defaultText = "config.boot.kernelPackages.callPackage ../pkgs/tuxedo-drivers { }";
+      description = ''
+        tuxedo-drivers kernel module package. Replaces nixpkgs'
+        hardware.tuxedo-drivers, which is pinned to boot.kernelPackages.tuxedo-drivers.
+      '';
+    };
   };
 
   config = mkIf cfg.enable (
     lib.mkMerge [
       {
-        hardware.tuxedo-drivers.enable = true;
+        # Same as nixpkgs' hardware.tuxedo-drivers.enable, but with cfg.driversPackage.
+        boot.extraModulePackages = [ tuxedo-drivers ];
 
         boot.kernelModules = [
+          "tuxedo_keyboard"
           # Tuxedo Control Center has a requirement on the minimum version
           # of "tuxedo_io" kernel module.
           # The exact requirement is currently in the
@@ -54,7 +70,10 @@ in
 
         environment.systemPackages = [ cfg.package ];
         services.dbus.packages = [ cfg.package ];
-        services.udev.packages = [ cfg.package ];
+        services.udev.packages = [
+          cfg.package
+          tuxedo-drivers
+        ];
 
         systemd = {
           packages = [ cfg.package ];
