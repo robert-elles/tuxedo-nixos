@@ -34,6 +34,9 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   postInstall = ''
+    # modules_install runs depmod here; NixOS generates these for the whole
+    # module tree, and copies in this package collide with the kernel's.
+    rm -f $out/lib/modules/*/modules.*
     substituteInPlace files/usr/lib/udev/rules.d/* \
       --replace-quiet "/bin/bash" "${lib.getExe bash}" \
       --replace-quiet "/bin/sh" "${lib.getExe bash}"
